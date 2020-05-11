@@ -16,7 +16,7 @@
 // parameters:
 // uintptr_t address -> page address
 // uintptr_t size    -> page size
-// uintptr_t data    -> a pointer that contains a copy
+// uintptr_t data    -> a pointer that contains a copy of the page
 // uintptr_t perms   -> page permissions (rwx)
 static void (*remap_annonymous)(uint64_t, uint64_t, uint64_t, uint64_t);
 
