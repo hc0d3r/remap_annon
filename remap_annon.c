@@ -12,8 +12,17 @@
 
 #include "remap_annon.h"
 
+// shellcode function pointer
+// parameters:
+// uintptr_t address -> page address
+// uintptr_t size    -> page size
+// uintptr_t data    -> a pointer that contains a copy
+// uintptr_t perms   -> page permissions (rwx)
 static void (*remap_annonymous)(uint64_t, uint64_t, uint64_t, uint64_t);
 
+// skip a few characters to get the filename (pathname)
+// /proc/self/maps format is:
+// address-address perms offset dev inode pathname
 static char *extract_filename(const char *buf)
 {
 	char *filename = NULL;
@@ -34,11 +43,15 @@ static char *extract_filename(const char *buf)
 	return filename;
 }
 
+// extract address range from a "address-address" format string
 static void extract_ranges(unsigned long *start, unsigned long *end, const char *str)
 {
 	char *aux;
+
 	*start = strtoul(str, &aux, 16);
-	*end = strtol(aux + 1, NULL, 16);
+
+	// + 1 to skip '-' char
+	*end = strtoul(aux + 1, NULL, 16);
 }
 
 static char *get_map_filename(void)
@@ -58,13 +71,15 @@ static char *get_map_filename(void)
 
 	addr = (unsigned long) get_map_filename;
 
-	while ((n = getline(&buf, &len, fh)) != -1) {
+	while ((n = getline(&buf, &len, fh)) > 0) {
+		// chomp
 		if (buf[n - 1] == '\n') {
 			buf[n - 1] = 0x0;
 		}
 
 		extract_ranges(&start, &end, buf);
 
+		// checks if "addr" are in the address range
 		if (addr >= start && addr < end) {
 			if ((name = extract_filename(buf))) {
 				name = strdup(name);
@@ -74,7 +89,9 @@ static char *get_map_filename(void)
 		}
 	}
 
+	// trying to be stealth
 	memset(buf, 0x0, len);
+
 	free(buf);
 	fclose(fh);
 
@@ -104,7 +121,7 @@ static void remap_annon(void)
 		goto end;
 	}
 
-	while ((n = getline(&buf, &len, fh)) != -1) {
+	while ((n = getline(&buf, &len, fh)) > 0) {
 		if (buf[n - 1] == '\n') {
 			buf[n - 1] = 0x0;
 		}
@@ -116,6 +133,7 @@ static void remap_annon(void)
 
 		extract_ranges(&start, &end, buf);
 
+		// -- start extract perms (rwx) --
 		aux = strchr(buf, ' ');
 		if (!aux) continue;
 
@@ -124,11 +142,14 @@ static void remap_annon(void)
 		if (aux[1] == 'r') perms |= PROT_READ;
 		if (aux[2] == 'w') perms |= PROT_WRITE;
 		if (aux[3] == 'x') perms |= PROT_EXEC;
+		// -- end --
 
 		void *data = mmap(NULL, (end - start), PROT_READ | PROT_WRITE,
 			MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 		if (data != MAP_FAILED) {
+			// copy the page because remap_annonymous will munmap the page and
+			// all the data will be lost, so we need a copy to restore it
 			memcpy(data, (char *)start, (end - start));
 
 			remap_annonymous((uint64_t)start, (uint64_t)(end - start),
@@ -138,11 +159,17 @@ static void remap_annon(void)
 		}
 	}
 
+	// trying to be stealth
+	memset(buf, 0x0, len);
+
 	free(buf);
 	fclose(fh);
 
 end:
-	free(filename);
+	if (filename) {
+		memset(buf, 0x0, strlen(filename));
+		free(filename);
+	}
 }
 
 static void *load_shellcode(unsigned char *sc, int len)
@@ -163,6 +190,8 @@ static void *load_shellcode(unsigned char *sc, int len)
 static __attribute__((constructor)) void remap_annon_init(void)
 {
 	remap_annonymous = load_shellcode(remap_annon_bin, remap_annon_bin_len);
+
+	// zeroing the shellcode, you don't need it anymore
 	memset(remap_annon_bin, 0x0, remap_annon_bin_len);
 
 	if (remap_annonymous) {
